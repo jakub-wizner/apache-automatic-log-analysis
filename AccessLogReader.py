@@ -83,3 +83,57 @@ class LogReader:
             result.append(log)
 
         return result
+    
+    def load_logs_for_minutes(self, minutes: int = 15) -> List[AccessLog]:
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=minutes)
+        dates_to_check = [now, now - timedelta(days=1)]
+        all_logs = []
+
+        for date in dates_to_check:
+            log_path = self._build_log_path(date)
+            lines = self._read_file(log_path)
+            
+            for line in lines:
+                match = self._parse_line(line)
+                if not match:
+                    continue
+                
+                dt = self._extract_timestamp(match.group("datetime"))
+                
+                
+                if dt < cutoff:
+                    continue
+                
+                log = AccessLog(
+                    source_ip=match.group("ip"),
+                    date=match.group("datetime"),
+                    first_line_of_request=match.group("request"),
+                    http_status_code=int(match.group("status")),
+                    bytes_received=int(match.group("bytes_received")),
+                    bytes_sent=int(match.group("bytes_sent")),
+                    user_agent=match.group("user_agent"),
+                    timestamp=dt
+                )
+                all_logs.append(log)
+        
+        return all_logs
+
+    def parse_log_line(self, line: str) -> Optional[AccessLog]:
+        match = self._parse_line(line)
+        if not match:
+            return None
+
+        dt = self._extract_timestamp(match.group("datetime"))
+
+        return AccessLog(
+            source_ip=match.group("ip"),
+            date=match.group("datetime"),
+            first_line_of_request=match.group("request"),
+            http_status_code=int(match.group("status")),
+            bytes_received=int(match.group("bytes_received")),
+            bytes_sent=int(match.group("bytes_sent")),
+            user_agent=match.group("user_agent"),
+            timestamp=dt
+        )
+

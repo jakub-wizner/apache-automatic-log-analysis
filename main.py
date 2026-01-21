@@ -1,47 +1,87 @@
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
+import collections
+from ResourceMonitor import ResourceMonitor
 from AccessLogReader import LogReader
 from DoSDetector import DoSDetector
 from DetectHttpNotFoundError import DetectHttpNotFoundError
 from DetectHttpAuthError import DetectHttpAuthError
+from MailSender import send_email
+import Report
 
 def main():
+    with open("mail_recievers.txt") as f:
+        mail_recievers = [mail.strip() for mail in f]
     reader = LogReader()
     detector = DoSDetector()
     error_detector = DetectHttpNotFoundError()
     auth_error_detector = DetectHttpAuthError()
-    today = datetime.now()
-    logs = reader.load_logs_for_day(today)
-    if not logs:
-        print("No logs found for the last 15 minutes.")
-        return
-    print(f"Loaded {len(logs)} logs from the last 15 minutes.")
-    
-    analysis = detector.analyze(logs)
-    offending = analysis.get("offending", {})
-    if offending:
-        report_path = detector.generate_html_report(analysis)
-        print(f"Detected {len(offending)} offending IP(s).")
-        print(f"DoS Report written to: {report_path}")
-    else:
-        print("No suspicious activity detected.")
-    
-    error_analysis = error_detector.analyze(logs)
-    total_404 = error_analysis.get("stats", {}).get("total_404_errors", 0)
-    if total_404 > 0:
-        error_report_path = error_detector.generate_html_report(error_analysis)
-        print(f"Detected {total_404} 404 error(s).")
-        print(f"404 Report written to: {error_report_path}")
-    else:
-        print("No 404 errors detected.")
-    
-    auth_error_analysis = auth_error_detector.analyze(logs)
-    total_auth_errors = auth_error_analysis.get("stats", {}).get("total_401_403_errors", 0)
-    if total_auth_errors > 0:
-        auth_error_report_path = auth_error_detector.generate_html_report(auth_error_analysis)
-        print(f"Detected {total_auth_errors} authentication error(s) [HTTP 401/403]")
-        print(f"HTTP 401/403 Authentication Error Report written to: {auth_error_report_path}")
-    else:
-        print("No HTTP 401/403 errors detected.")
+    resource_monitor = ResourceMonitor(user='www-data')
+
+    report_cooldown = 900  # 15 minutes
+    analysis_interval = 60
+    last_report_time = 0.0
+    last_analysis_time = 0.0
+
+    print("Starting periodic analysis of daily Apache log file...")
+
+    while True:
+        now = datetime.now()
+
+        if time.time() - last_analysis_time >= analysis_interval:
+
+            logs = reader.load_logs_for_minutes(minutes=int(report_cooldown/60))
+
+            if not logs:
+                print(f"[{now.strftime('%H:%M:%S')}] No logs found in the last {int(report_cooldown/60)} minutes.")
+                time.sleep(analysis_interval)
+                continue
+
+            analysis = detector.analyze(logs)
+            error_analysis = error_detector.analyze(logs)
+            auth_error_analysis = auth_error_detector.analyze(logs)
+
+            cpu, memory, read_kb, write_kb = resource_monitor.get_user_resource_usage()
+
+            offending = analysis.get("offending", {})
+            total_404 = error_analysis.get("stats", {}).get("total_404_errors", 0)
+            total_auth = auth_error_analysis.get("stats", {}).get("total_401_403_errors", 0)
+
+            high_resources = (
+                cpu > 50.0 or
+                memory > 1024.0 or
+                read_kb > 1024.0 or
+                write_kb > 1024.0
+            )
+
+            issue_detected = offending or total_404 > 0 or total_auth > 0 or high_resources
+
+            print(f"[{now.strftime('%H:%M:%S')}] Logs in last 15 min: {len(logs)}")
+            print(f"CPU: {cpu:.2f}% | MEM: {memory:.2f} MB | R: {read_kb:.2f} KB/s | W: {write_kb:.2f} KB/s")
+
+            if issue_detected and (time.time() - last_report_time >= report_cooldown):
+
+                dos_path = detector.generate_html_report(analysis)
+                error_path = error_detector.generate_html_report(error_analysis)
+                auth_error_path = auth_error_detector.generate_html_report(auth_error_analysis)
+                report_path=f"report{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+                try:
+                    Report.main(report_path)
+                except Exception as e:
+                    print(f"Wystąpił błąd podczas uruchamiania analizy: {e}")
+
+                for reciever in mail_recievers:
+                    send_email(
+                        receiver_email=reciever,
+                        subject=f"Raport Apache2 {datetime.now()}",
+                        body="Wykryto nieprawidłowości! W załącznikach znajduje się zbiorczy raport oraz najnowsze szczegółowe raporty.",
+                        attachments=[report_path, dos_path, error_path, auth_error_path])
+                last_report_time = time.time()
+
+            last_analysis_time = time.time()
+
+        time.sleep(1)
+        
 
 if __name__ == "__main__":
     main()

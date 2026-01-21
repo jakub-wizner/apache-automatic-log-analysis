@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import Optional
+
 class AccessLog:
     def __init__(
         self,
@@ -8,6 +11,7 @@ class AccessLog:
         bytes_received: int,
         bytes_sent: int,
         user_agent: str,
+        timestamp: Optional[datetime] = None,
     ):
         self._source_ip = source_ip
         self._date = date
@@ -16,6 +20,7 @@ class AccessLog:
         self._bytes_received = bytes_received
         self._bytes_sent = bytes_sent
         self._user_agent = user_agent
+        self._timestamp = timestamp
 
     @property
     def source_ip(self):
@@ -44,3 +49,6 @@ class AccessLog:
     @property
     def user_agent(self):
         return self._user_agent
+    @property
+    def timestamp(self):
+        return self._timestamp
